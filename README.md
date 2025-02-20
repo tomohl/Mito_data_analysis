@@ -11,10 +11,10 @@ cd "Pathname"
 
 Run:  
 
-git clone https://gitlab.ethz.ch/kwentinck/student_microscopy_analysis.git
+git clone https://github.com/kleele-lab/Mito_data_analysis.git
 
 ## make virtual environment
-cd Student_microscopy_analysis   
+cd Mito_data_analysis
 python -m venv env
 
 ## activate virtual environment (do this always before using):
@@ -22,7 +22,6 @@ python -m venv env
 
 ## install dependencies:
 pip install -r requirements.txt  
-pip install "napari[all]"
 
 ## use scripts: 
 python "script.py"
