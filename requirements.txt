@@ -1,0 +1,9 @@
+pandas
+numpy
+h5py
+tk
+scikit-image
+skan
+seaborn
+napari[all]
+
