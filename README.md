@@ -1,4 +1,4 @@
-# Student_microscopy_analysis
+# Mitochondrial Microscopy Data Analysis
 
 ## Installation:
 clone git repo:   
