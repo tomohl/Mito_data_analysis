@@ -6,4 +6,5 @@ scikit-image
 skan
 seaborn
 napari[all]
-
+xmltodict
+bioformats 

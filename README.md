@@ -22,6 +22,7 @@ python -m venv env
 
 ## install dependencies:
 pip install -r requirements.txt  
+pip install --use-pep517 git+https://github.com/SchmollerLab/python-javabridge-windows
 
 ## use scripts: 
 python "script.py"
