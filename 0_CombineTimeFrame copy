@@ -1,0 +1,100 @@
+import os
+import re
+import tifffile
+import numpy as np
+import tkinter as tk
+from tkinter import filedialog
+
+def get_all_tif_paths_sorted_by_time(folder):
+    """
+    Recursively finds .tif files and sorts them by 'Time Frame X' from grandparent folder name.
+    Works even if .tif is nested (e.g., in stack1/).
+    """
+    timepoint_entries = []
+    for dirpath, _, filenames in os.walk(folder):
+        for fname in filenames:
+            if fname.lower().endswith('.tif'):
+                full_path = os.path.join(dirpath, fname)
+
+                # Go up two levels: .../Time Frame X/stack1/frame.tif → get 'Time Frame X'
+                try:
+                    grandparent = os.path.basename(os.path.dirname(os.path.dirname(full_path)))
+                    match = re.search(r'Time Frame (\d+)', grandparent)
+                    if match:
+                        time_index = int(match.group(1))
+                        timepoint_entries.append((time_index, full_path))
+                except IndexError:
+                    continue
+
+    if not timepoint_entries:
+        print("No .tif files matched expected folder pattern with 'Time Frame X'")
+        return []
+
+    # Sort by time frame number
+    timepoint_entries.sort(key=lambda x: x[0])
+    return [path for _, path in timepoint_entries]
+
+def process_single_image(filepath):
+    """Loads .tif, extracts channel 1, max-projects it."""
+    with tifffile.TiffFile(filepath) as tif:
+        arr = tif.asarray()
+        if arr.ndim != 4 or arr.shape[1] < 2:
+            print(f"⚠ Unexpected shape {arr.shape} in {filepath}. Skipping.")
+            return None
+        ch1_stack = arr[:, 0, :, :]  # shape: (Z, Y, X)
+        max_proj = np.max(ch1_stack, axis=0)  # shape: (Y, X)
+        return max_proj
+
+def build_timelapse_stack(tif_paths):
+    projections = []
+    for path in tif_paths:
+        proj = process_single_image(path)
+        if proj is not None:
+            projections.append(proj)
+    if not projections:
+        raise ValueError("No valid projections were created.")
+    stack = np.stack(projections, axis=0)
+    print(f"✔ Final time-lapse stack shape: {stack.shape} (T, Y, X)")
+    return stack
+
+def main():
+    root = tk.Tk()
+    root.withdraw()
+
+    print("Select S3 folder (time-lapse root)...")
+    source_folder = filedialog.askdirectory(title="Select Time-lapse Folder")
+    if not source_folder:
+        print("No source folder selected. Exiting.")
+        return
+
+    print("Select destination folder to save the combined TIFF...")
+    output_folder = filedialog.askdirectory(title="Select Output Folder")
+    if not output_folder:
+        print("No output folder selected. Exiting.")
+        return
+
+    tif_paths = get_all_tif_paths_sorted_by_time(source_folder)
+    if not tif_paths:
+        print("No .tif files found.")
+        return
+
+    final_stack = build_timelapse_stack(tif_paths)
+
+    # Get name from first subfolder (e.g. '20250305_050325_unsynchronized_RPE1_03')
+    # Example: source_folder = /.../S4
+    s_folder = os.path.basename(source_folder)  # "S4"
+
+    # Try to extract sample name from first timepoint folder (e.g., '20250305_050325_unsynchronized_RPE1_03')
+    subfolders = [d for d in os.listdir(source_folder) if os.path.isdir(os.path.join(source_folder, d))]
+    first_match = re.match(r"(.+?) - Time Frame \d+", subfolders[0]) if subfolders else None
+    sample_part = first_match.group(1) if first_match else "sample"
+
+    sample_name = f"{s_folder}_{sample_part}"
+
+    output_path = os.path.join(output_folder, f"{sample_name}_maxproj_channel1.tif")
+
+    tifffile.imwrite(output_path, final_stack.astype(np.uint16), compression="zlib")
+    print(f"✅ Saved final stack to: {output_path}")
+
+if __name__ == "__main__":
+    main()

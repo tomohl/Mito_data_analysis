@@ -1,0 +1,44 @@
+import os
+import numpy as np
+import tkinter as tk
+from tkinter import filedialog
+from tifffile import imread, imwrite
+
+def max_project_all_tifs(input_folder):
+    output_folder = os.path.join(input_folder, "MaxProjections")
+    os.makedirs(output_folder, exist_ok=True)
+
+    tif_files = [f for f in os.listdir(input_folder) if f.lower().endswith('.tif')]
+
+    if not tif_files:
+        print("No .tif files found in selected folder.")
+        return
+
+    for tif_file in tif_files:
+        full_path = os.path.join(input_folder, tif_file)
+        try:
+            img = imread(full_path)
+        except Exception as e:
+            print(f"Could not read {tif_file}: {e}")
+            continue
+
+        if img.ndim < 3:
+            print(f"{tif_file} is not a stack (shape: {img.shape}), skipping.")
+            continue
+
+        max_proj = np.max(img, axis=0)  # max over Z or T
+        output_path = os.path.join(output_folder, f"{os.path.splitext(tif_file)[0]}_MAX.tif")
+        imwrite(output_path, max_proj.astype(np.uint16))
+        print(f"✅Saved max-projection: {output_path}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.withdraw()
+
+    print("Select folder containing .tif time-lapse stacks...")
+    folder = filedialog.askdirectory(title="Select Folder of TIFFs")
+    if not folder:
+        print("No folder selected. Exiting.")
+        exit()
+
+    max_project_all_tifs(folder)

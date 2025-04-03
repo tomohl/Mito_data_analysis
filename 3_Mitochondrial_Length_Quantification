@@ -1,0 +1,143 @@
+import os
+import numpy as np
+import pandas as pd
+import skimage.morphology as morph
+import skan
+import re
+import tifffile as tiff
+import h5py
+import matplotlib.pyplot as plt
+from tkinter import Tk, filedialog
+
+def lengths_2d(array, small_mito=100, return_skeleton=False):
+    small_rem = morph.remove_small_objects(morph.label(array), min_size=small_mito)
+    array = np.array(small_rem > 0) * 1
+    skel = morph.skeletonize(array, method='lee')
+
+    if skel.sum() == 0:
+        return (pd.DataFrame(), skel) if return_skeleton else pd.DataFrame()
+
+    branch_data = skan.summarize(skan.Skeleton(skel, spacing=(0.045, 0.045)))
+    df = pd.DataFrame({
+        'av_branch_length': branch_data.groupby('skeleton-id').mean()['branch-distance'].tolist(),
+        'max_branch_length': branch_data.groupby('skeleton-id').max()['branch-distance'].tolist(),
+        'n_branches': branch_data.groupby('skeleton-id').count()['branch-distance'].tolist(),
+        'total_mito_length': branch_data.groupby('skeleton-id').sum()['branch-distance'].tolist()
+    })
+    return (df, skel) if return_skeleton else df
+
+# --- User Folder Selection ---
+Tk().withdraw()
+mito_dir = filedialog.askdirectory(title="Select Mitochondria Segmentation Folder")
+if not mito_dir:
+    raise ValueError("No mitochondria folder selected.")
+cell_dir = filedialog.askdirectory(title="Select Cell Mask Folder")
+if not cell_dir:
+    raise ValueError("No cell mask folder selected.")
+
+small_mito = 10
+output_img_dir = os.path.join(mito_dir, 'skeleton_overlays')
+os.makedirs(output_img_dir, exist_ok=True)
+
+# Load cell masks
+cell_masks = {
+    f.replace('_seg.npy', '').rstrip('_'): os.path.join(cell_dir, f)
+    for f in os.listdir(cell_dir) if f.endswith('_seg.npy')
+}
+
+res = []
+for file in os.listdir(mito_dir):
+    if not file.endswith("Simple Segmentation.h5"):
+        continue
+
+    file_path = os.path.join(mito_dir, file)
+    basename = os.path.splitext(file)[0]
+    basename_core = re.sub(r'_slice\d+.*$', '', basename)
+
+    matching_keys = [key for key in cell_masks if key.startswith(basename_core)]
+    if not matching_keys:
+        continue
+
+    cell_mask_path = cell_masks[matching_keys[0]]
+    cell_seg = np.load(cell_mask_path, allow_pickle=True)
+
+    with h5py.File(file_path, 'r') as h5f:
+        dataset_name = list(h5f.keys())[0]
+        mitos = np.squeeze(h5f[dataset_name][()])
+
+    timepoint_match = re.search(r'_slice(\d+)', basename)
+    timepoint = int(timepoint_match.group(1)) if timepoint_match else 0
+
+    if mitos.ndim == 3:
+        for slice_idx in range(mitos.shape[0]):
+            mitos_slice = mitos[slice_idx]
+            if mitos_slice.shape != cell_seg.shape:
+                min_shape = (
+                    min(cell_seg.shape[0], mitos_slice.shape[0]),
+                    min(cell_seg.shape[1], mitos_slice.shape[1])
+                )
+                cell_seg_slice = cell_seg[:min_shape[0], :min_shape[1]]
+                mitos_slice = mitos_slice[:min_shape[0], :min_shape[1]]
+            else:
+                cell_seg_slice = cell_seg
+
+            mitos_slice[mitos_slice == 2] = 0
+
+            for cell in range(1, cell_seg_slice.max() + 1):
+                temp_mito = mitos_slice.copy()
+                temp_mito[cell_seg_slice != cell] = 0
+                if temp_mito.sum() > 0:
+                    temp, skel = lengths_2d(temp_mito, small_mito, return_skeleton=True)
+                    if not temp.empty:
+                        img_path = os.path.join(output_img_dir, f"{basename}_slice{slice_idx:03d}_cell{cell}.png")
+                        plt.figure(figsize=(4, 4))
+                        plt.imshow(temp_mito, cmap='gray')
+                        plt.imshow(skel, cmap='hot', alpha=0.7)
+                        plt.axis('off')
+                        plt.savefig(img_path, dpi=150, bbox_inches='tight')
+                        plt.close()
+
+                        temp['time_point'] = f"{slice_idx:03d}"
+                        temp['image'] = basename
+                        temp['cell'] = cell
+                        res.append(temp)
+    else:
+        if mitos.shape != cell_seg.shape:
+            min_shape = (
+                min(cell_seg.shape[0], mitos.shape[0]),
+                min(cell_seg.shape[1], mitos.shape[1])
+            )
+            cell_seg = cell_seg[:min_shape[0], :min_shape[1]]
+            mitos = mitos[:min_shape[0], :min_shape[1]]
+
+        mitos[mitos == 2] = 0
+
+        for cell in range(1, cell_seg.max() + 1):
+            temp_mito = mitos.copy()
+            temp_mito[cell_seg != cell] = 0
+            if temp_mito.sum() > 0:
+                temp, skel = lengths_2d(temp_mito, small_mito, return_skeleton=True)
+                if not temp.empty:
+                    img_path = os.path.join(output_img_dir, f"{basename}_cell{cell}.png")
+                    plt.figure(figsize=(4, 4))
+                    plt.imshow(temp_mito, cmap='gray')
+                    plt.imshow(skel, cmap='hot', alpha=0.7)
+                    plt.axis('off')
+                    plt.savefig(img_path, dpi=150, bbox_inches='tight')
+                    plt.close()
+
+                    temp['time_point'] = f"{timepoint:03d}"
+                    temp['image'] = basename
+                    temp['cell'] = cell
+                    res.append(temp)
+
+# Save results
+if res:
+    res = pd.concat(res)
+    res = res[['time_point', 'image', 'cell', 'av_branch_length', 'max_branch_length', 'n_branches', 'total_mito_length']]
+    output_file = os.path.join(mito_dir, 'mito_lengths_2d.csv')
+    res.to_csv(output_file, index=False)
+    print(f"\n✅ Results saved: {output_file}")
+    print(f"🖼️  Skeleton overlays saved to: {output_img_dir}")
+else:
+    print("❌ No results to save.")
